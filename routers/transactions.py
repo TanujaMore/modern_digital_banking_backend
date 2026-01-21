@@ -13,12 +13,14 @@ router = APIRouter(
     tags=["Transactions"]
 )
 
+# 🔹 GET ALL TRANSACTIONS FOR AN ACCOUNT
 @router.get("/{account_id}", response_model=List[TransactionResponse])
 def get_transactions(
     account_id: int,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Check account belongs to user
     account = db.query(Account).filter(
         Account.id == account_id,
         Account.user_id == current_user.id
@@ -32,20 +34,34 @@ def get_transactions(
     ).all()
 
 
+# 🔹 CREATE NEW TRANSACTION (CREDIT / DEBIT)
 @router.post("/", response_model=TransactionResponse)
 def create_transaction(
     transaction: TransactionCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
+    # Check account belongs to user
     account = db.query(Account).filter(
         Account.id == transaction.account_id,
         Account.user_id == current_user.id
     ).first()
 
-    if not account: 
+    if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    # 🔥 UPDATE ACCOUNT BALANCE
+    if transaction.txn_type.lower() == "credit":
+        account.balance += transaction.amount
+    elif transaction.txn_type.lower() == "debit":
+        account.balance -= transaction.amount
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid transaction type (use 'credit' or 'debit')"
+        )
+
+    # 🔹 CREATE TRANSACTION RECORD
     new_txn = Transaction(
         account_id=transaction.account_id,
         amount=transaction.amount,
@@ -60,6 +76,7 @@ def create_transaction(
     return new_txn
 
 
+# 🔹 UPLOAD TRANSACTIONS FROM CSV
 @router.post("/upload-csv")
 def upload_transactions_csv(
     file: UploadFile = File(...),
@@ -80,6 +97,7 @@ def upload_transactions_csv(
 
         account_id = int(row["account_id"])
 
+        # Check account belongs to user
         account = db.query(Account).filter(
             Account.id == account_id,
             Account.user_id == current_user.id
@@ -88,10 +106,21 @@ def upload_transactions_csv(
         if not account:
             continue
 
+        amount = float(row["amount"])
+        txn_type = row["txn_type"].lower()
+
+        # 🔥 UPDATE BALANCE
+        if txn_type == "credit":
+            account.balance += amount
+        elif txn_type == "debit":
+            account.balance -= amount
+        else:
+            continue
+
         txn = Transaction(
             account_id=account_id,
-            amount=float(row["amount"]),
-            txn_type=row["txn_type"],
+            amount=amount,
+            txn_type=txn_type,
             description=row.get("description")
         )
 
