@@ -1,5 +1,6 @@
 from pydantic import BaseModel,EmailStr,Field
 from typing import Optional
+from datetime import datetime
 
 class RegisterUser(BaseModel):
     name: str
@@ -31,13 +32,14 @@ class AccountResponse(BaseModel):
     class Config:
         from_attributes = True 
 
-
 class TransactionCreate(BaseModel):
     account_id: int
     amount: float
-    txn_type: str   # "credit" or "debit"
-    description: str | None = None
-
+    txn_type: str
+    description: Optional[str] = None
+    merchant: Optional[str] = None      # 🔥 MUST MATCH MODEL NAME
+    currency: Optional[str] = None  
+    txn_date: Optional[datetime] = None  
 
 class TransactionResponse(BaseModel):
     id: int
@@ -45,7 +47,44 @@ class TransactionResponse(BaseModel):
     amount: float
     txn_type: str
     description: str | None = None
+    merchant: Optional[str] = None      # 🔥 ADD THIS
+    currency: Optional[str] = "INR"     # 🔥 ADD THIS
+    category: Optional[str] = None
+    txn_date: Optional[datetime] = None 
 
     model_config = {
         "from_attributes": True
     }
+
+
+class CategoryCreate(BaseModel):
+    name: str
+    keywords: str
+
+class CategoryResponse(BaseModel):
+    id: int
+    name: str
+    keywords: str
+
+    class Config:
+        from_attributes = True
+
+
+class BudgetCreate(BaseModel):
+    month: int
+    year: int
+    category: str
+    limit_amount: float
+
+
+class BudgetResponse(BudgetCreate):
+    id: int
+    spent_amount: float
+    warning: str | None = None   # 🔥 must be here
+    
+    class Config:
+        from_attributes = True
+
+
+
+

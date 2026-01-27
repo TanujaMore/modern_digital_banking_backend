@@ -2,7 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine
 import models
-from routers import users, accounts, transactions
+from routers import users, accounts, transactions, categorize,budgets,dashboard
+
 models.Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Modern Digital Banking Dashboard")
@@ -17,6 +18,13 @@ app.add_middleware(
 app.include_router(users.router,prefix="/users")
 app.include_router(accounts.router,prefix="/accounts")
 app.include_router(transactions.router)
+app.include_router(categorize.router)
+app.include_router(budgets.router)
+app.include_router(dashboard.router)
+
+
+
+
 
 @app.get("/")
 def root():

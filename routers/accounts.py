@@ -5,10 +5,7 @@ from database import get_db
 from auth import get_current_user
 from schemas import AccountCreate, AccountResponse
 
-
-
 router = APIRouter(tags=["Accounts"])
-
 
 @router.get("/", response_model=list[AccountResponse])
 def get_accounts(
