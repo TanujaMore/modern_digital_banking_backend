@@ -4,6 +4,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from database import SessionLocal
 from models import User
+
 from schemas import RegisterUser
 from auth import hash_password, verify_password, create_access_token
 from database import get_db
@@ -22,7 +23,8 @@ def register(user: RegisterUser, db: Session = Depends(get_db)):
         name=user.name,
         email=user.email,
         password=hash_password(user.password),
-        phone=user.phone
+        phone=user.phone,
+     
     )
 
     db.add(new_user)

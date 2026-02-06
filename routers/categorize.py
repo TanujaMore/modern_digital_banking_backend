@@ -21,6 +21,7 @@ def get_categories(
     return db.query(Category).all()
 
 
+
 # 🔹 CREATE NEW CATEGORY (WITH KEYWORDS)
 @router.post("/", response_model=CategoryResponse)
 def create_category(
@@ -83,6 +84,7 @@ def delete_category(
 
     return {"message": "Category deleted successfully"}
 
+
 def auto_assign_category(db, transaction):
     text = ""
 
@@ -101,7 +103,4 @@ def auto_assign_category(db, transaction):
             words = cat.keywords.split(",")
             for word in words:
                 if word.strip().lower() in text:
-                    return cat.name 
-            
-
-    
+                    return cat.name

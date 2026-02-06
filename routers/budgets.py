@@ -100,3 +100,32 @@ def delete_budget(
     db.commit()
 
     return {"message": "Budget deleted successfully"}
+
+# =================================================
+# D) UPDATE BUDGET
+# =================================================
+@router.put("/{budget_id}", response_model=BudgetResponse)
+def update_budget(
+    budget_id: int,
+    budget: BudgetCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(get_current_user)
+):
+    existing = db.query(Budget).filter(
+        Budget.id == budget_id,
+        Budget.user_id == current_user.id
+    ).first()
+
+    if not existing:
+        raise HTTPException(status_code=404, detail="Budget not found")
+
+    # update fields
+    existing.month = budget.month
+    existing.year = budget.year
+    existing.category = budget.category
+    existing.limit_amount = budget.limit_amount
+
+    db.commit()
+    db.refresh(existing)
+
+    return existing

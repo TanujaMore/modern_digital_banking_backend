@@ -1,49 +1,49 @@
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from sqlalchemy.orm import Session
 from typing import List
 import csv, io
 from datetime import datetime
 from sqlalchemy import func
-from pydantic import BaseModel
 
 from routers.categorize import auto_assign_category
 from database import get_db
 from auth import get_current_user
-from models import User, Account, Transaction, Category
+from models import User, Account, Transaction, Category, Reward
 from schemas import TransactionCreate, TransactionResponse
-from fastapi import Query
-
-
 
 router = APIRouter(
     prefix="/transactions",
     tags=["Transactions"]
 )
 
-# 🔹 GET ALL TRANSACTIONS (FOR LOGGED IN USER)
+# =====================================================
+# GET ALL TRANSACTIONS (LOGGED IN USER)
+# =====================================================
 @router.get("/", response_model=List[TransactionResponse])
 def get_all_transactions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    transactions = db.query(Transaction).join(Account).filter(
-        Account.user_id == current_user.id
-    ).all()
-    return transactions
+    return (
+        db.query(Transaction)
+        .join(Account)
+        .filter(Account.user_id == current_user.id)
+        .all()
+    )
 
-
-# 🔹 GET ALL CATEGORIES
+# =====================================================
+# GET ALL CATEGORIES
+# =====================================================
 @router.get("/categories")
 def get_all_categories(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    categories = db.query(Category).all()
-    return categories
+    return db.query(Category).all()
 
-
-# 🔹 CATEGORY WISE SPEND SUMMARY (FOR CHARTS & BUDGETS)
-
+# =====================================================
+# CATEGORY SUMMARY (FOR CHARTS / BUDGETS)
+# =====================================================
 @router.get("/category-summary")
 def get_category_summary(
     db: Session = Depends(get_db),
@@ -60,17 +60,14 @@ def get_category_summary(
         .all()
     )
 
-    summary = []
-    for row in result:
-        summary.append({
-            "category": row[0],
-            "total": float(row[1])
-        })
+    return [
+        {"category": row[0], "total": float(row[1])}
+        for row in result
+    ]
 
-    return summary
-
-
-# 🔹 GET ALL TRANSACTIONS FOR AN ACCOUNT
+# =====================================================
+# GET TRANSACTIONS FOR SPECIFIC ACCOUNT
+# =====================================================
 @router.get("/{account_id}", response_model=List[TransactionResponse])
 def get_transactions(
     account_id: int,
@@ -89,8 +86,9 @@ def get_transactions(
         Transaction.account_id == account_id
     ).all()
 
-
-# 🔹 CREATE NEW TRANSACTION  (NOT TOUCHED)
+# =====================================================
+# CREATE NEW TRANSACTION (AUTO REWARD SYSTEM – FIXED)
+# =====================================================
 @router.post("/", response_model=TransactionResponse)
 def create_transaction(
     transaction: TransactionCreate,
@@ -105,17 +103,19 @@ def create_transaction(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    # UPDATE BALANCE
+    # -------------------------------
+    # UPDATE ACCOUNT BALANCE
+    # -------------------------------
     if transaction.txn_type.lower() == "credit":
         account.balance += transaction.amount
     elif transaction.txn_type.lower() == "debit":
         account.balance -= transaction.amount
     else:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid transaction type (use 'credit' or 'debit')"
-        )
+        raise HTTPException(status_code=400, detail="Invalid transaction type")
 
+    # -------------------------------
+    # CREATE TRANSACTION
+    # -------------------------------
     new_txn = Transaction(
         account_id=transaction.account_id,
         amount=transaction.amount,
@@ -126,18 +126,38 @@ def create_transaction(
         currency=transaction.currency
     )
 
-    # 🔥 AUTO ASSIGN CATEGORY
-    category = auto_assign_category(db, new_txn)
-    new_txn.category = category
-
+    new_txn.category = auto_assign_category(db, new_txn)
     db.add(new_txn)
+
+    # =================================================
+    # 🔥 AUTO REWARD SYSTEM (₹100 = 1 POINT)
+    # =================================================
+    if transaction.txn_type.lower() == "debit":
+        earned_points = int(transaction.amount // 100)
+
+        if earned_points > 0:
+            reward = db.query(Reward).filter(
+                Reward.user_id == current_user.id,
+                Reward.program_name == "Bank Rewards"
+            ).first()
+
+            if not reward:
+                reward = Reward(
+                    user_id=current_user.id,
+                    program_name="Bank Rewards",
+                    points_balance=0
+                )
+                db.add(reward)
+
+            reward.points_balance += earned_points
+
     db.commit()
     db.refresh(new_txn)
-
     return new_txn
 
-
-# 🔹 CSV UPLOAD (NOT TOUCHED)
+# =====================================================
+# CSV UPLOAD (NOW WITH REWARD SUPPORT)
+# =====================================================
 @router.post("/upload-csv")
 def upload_transactions_csv(
     file: UploadFile = File(...),
@@ -149,17 +169,27 @@ def upload_transactions_csv(
 
     content = file.file.read().decode("utf-8")
     reader = csv.DictReader(io.StringIO(content))
-
     created = 0
+
+    reward = db.query(Reward).filter(
+        Reward.user_id == current_user.id,
+        Reward.program_name == "Bank Rewards"
+    ).first()
+
+    if not reward:
+        reward = Reward(
+            user_id=current_user.id,
+            program_name="Bank Rewards",
+            points_balance=0
+        )
+        db.add(reward)
 
     for row in reader:
         if "account_id" not in row:
             continue
 
-        account_id = int(row["account_id"])
-
         account = db.query(Account).filter(
-            Account.id == account_id,
+            Account.id == int(row["account_id"]),
             Account.user_id == current_user.id
         ).first()
 
@@ -177,27 +207,28 @@ def upload_transactions_csv(
             continue
 
         txn = Transaction(
-            account_id=account_id,
+            account_id=account.id,
             amount=amount,
             txn_type=txn_type,
             description=row.get("description"),
             merchant=row.get("merchant"),
+            txn_date=datetime.utcnow()
         )
 
-        # 🔥 AUTO ASSIGN CATEGORY
-        category = auto_assign_category(db, txn)
-        txn.category = category
-
+        txn.category = auto_assign_category(db, txn)
         db.add(txn)
         created += 1
+
+        # 🔥 Reward for CSV debit
+        if txn_type == "debit":
+            reward.points_balance += int(amount // 100)
 
     db.commit()
     return {"message": f"{created} transactions uploaded successfully"}
 
-
-# 🔹 MANUAL RECATEGORIZATION (FIXED VERSION)
-
-
+# =====================================================
+# UPDATE CATEGORY (MANUAL)
+# =====================================================
 @router.put("/{txn_id}/category")
 def update_transaction_category(
     txn_id: int,
@@ -219,6 +250,3 @@ def update_transaction_category(
         "transaction_id": txn.id,
         "new_category": txn.category
     }
-
-
-
