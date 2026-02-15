@@ -3,33 +3,36 @@ from sqlalchemy.orm import Session
 from typing import List
 import csv, io
 from datetime import datetime
-from sqlalchemy import func
+from decimal import Decimal
 
 from routers.categorize import auto_assign_category
 from database import get_db
 from auth import get_current_user
 from models import User, Account, Transaction, Category, Reward
 from schemas import TransactionCreate, TransactionResponse
+from utils.alert_helper import create_alert
 
 router = APIRouter(
     prefix="/transactions",
     tags=["Transactions"]
 )
 
-# =====================================================
-# GET ALL TRANSACTIONS (LOGGED IN USER)
-# =====================================================
-@router.get("/", response_model=List[TransactionResponse])
+@router.get("/")
 def get_all_transactions(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     return (
         db.query(Transaction)
-        .join(Account)
+        .join(Account, Transaction.account_id == Account.id)
         .filter(Account.user_id == current_user.id)
+        .order_by(Transaction.txn_date.desc())
         .all()
     )
+
+# =====================================================
+# GET ALL TRANSACTIONS
+# =====================================================
 
 # =====================================================
 # GET ALL CATEGORIES
@@ -42,31 +45,7 @@ def get_all_categories(
     return db.query(Category).all()
 
 # =====================================================
-# CATEGORY SUMMARY (FOR CHARTS / BUDGETS)
-# =====================================================
-@router.get("/category-summary")
-def get_category_summary(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    result = (
-        db.query(Transaction.category, func.sum(Transaction.amount).label("total"))
-        .join(Account)
-        .filter(
-            Account.user_id == current_user.id,
-            Transaction.txn_type == "debit"
-        )
-        .group_by(Transaction.category)
-        .all()
-    )
-
-    return [
-        {"category": row[0], "total": float(row[1])}
-        for row in result
-    ]
-
-# =====================================================
-# GET TRANSACTIONS FOR SPECIFIC ACCOUNT
+# GET TRANSACTIONS FOR ACCOUNT
 # =====================================================
 @router.get("/{account_id}", response_model=List[TransactionResponse])
 def get_transactions(
@@ -87,7 +66,7 @@ def get_transactions(
     ).all()
 
 # =====================================================
-# CREATE NEW TRANSACTION (AUTO REWARD SYSTEM – FIXED)
+# CREATE TRANSACTION (FIXED)
 # =====================================================
 @router.post("/", response_model=TransactionResponse)
 def create_transaction(
@@ -103,13 +82,16 @@ def create_transaction(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
+    txn_type = transaction.txn_type.lower()
+    amount = Decimal(str(transaction.amount))
+
     # -------------------------------
-    # UPDATE ACCOUNT BALANCE
+    # UPDATE BALANCE
     # -------------------------------
-    if transaction.txn_type.lower() == "credit":
-        account.balance += transaction.amount
-    elif transaction.txn_type.lower() == "debit":
-        account.balance -= transaction.amount
+    if txn_type == "credit":
+        account.balance += float(amount)
+    elif txn_type == "debit":
+        account.balance -= float(amount)
     else:
         raise HTTPException(status_code=400, detail="Invalid transaction type")
 
@@ -118,24 +100,50 @@ def create_transaction(
     # -------------------------------
     new_txn = Transaction(
         account_id=transaction.account_id,
-        amount=transaction.amount,
-        txn_type=transaction.txn_type,
+        amount=amount,
+        txn_type=txn_type,
         txn_date=transaction.txn_date or datetime.utcnow(),
         description=transaction.description,
         merchant=transaction.merchant,
-        currency=transaction.currency
+        currency=transaction.currency or "INR"
     )
 
     new_txn.category = auto_assign_category(db, new_txn)
     db.add(new_txn)
 
-    # =================================================
-    # 🔥 AUTO REWARD SYSTEM (₹100 = 1 POINT)
-    # =================================================
-    if transaction.txn_type.lower() == "debit":
-        earned_points = int(transaction.amount // 100)
+    # -------------------------------
+    # ALERTS (SAFE)
+    # -------------------------------
+    try:
+        if account.balance < 1000:
+            create_alert(
+                db=db,
+                user_id=current_user.id,
+                alert_type="low_balance",
+                title="Low Balance",
+                message=f"Your account balance is low (₹{account.balance})",
+                severity="warning"
+            )
 
-        if earned_points > 0:
+        if txn_type == "debit" and amount >= 10000:
+            create_alert(
+                db=db,
+                user_id=current_user.id,
+                alert_type="large_transaction",
+                title="Large Transaction",
+                message=f"₹{amount} spent at {transaction.merchant}",
+                severity="warning"
+            )
+    except Exception:
+        pass  # alerts must NEVER block transaction
+
+    # -------------------------------
+    # REWARDS
+    # -------------------------------
+    if txn_type == "debit":
+        points = int(amount // 100)
+
+        if points > 0:
             reward = db.query(Reward).filter(
                 Reward.user_id == current_user.id,
                 Reward.program_name == "Bank Rewards"
@@ -149,14 +157,14 @@ def create_transaction(
                 )
                 db.add(reward)
 
-            reward.points_balance += earned_points
+            reward.points_balance += points
 
     db.commit()
     db.refresh(new_txn)
     return new_txn
 
 # =====================================================
-# CSV UPLOAD (NOW WITH REWARD SUPPORT)
+# CSV UPLOAD (FIXED)
 # =====================================================
 @router.post("/upload-csv")
 def upload_transactions_csv(
@@ -185,9 +193,6 @@ def upload_transactions_csv(
         db.add(reward)
 
     for row in reader:
-        if "account_id" not in row:
-            continue
-
         account = db.query(Account).filter(
             Account.id == int(row["account_id"]),
             Account.user_id == current_user.id
@@ -196,13 +201,13 @@ def upload_transactions_csv(
         if not account:
             continue
 
-        amount = float(row["amount"])
+        amount = Decimal(str(row["amount"]))
         txn_type = row["txn_type"].lower()
 
         if txn_type == "credit":
-            account.balance += amount
+            account.balance += float(amount)
         elif txn_type == "debit":
-            account.balance -= amount
+            account.balance -= float(amount)
         else:
             continue
 
@@ -219,7 +224,6 @@ def upload_transactions_csv(
         db.add(txn)
         created += 1
 
-        # 🔥 Reward for CSV debit
         if txn_type == "debit":
             reward.points_balance += int(amount // 100)
 
@@ -227,7 +231,7 @@ def upload_transactions_csv(
     return {"message": f"{created} transactions uploaded successfully"}
 
 # =====================================================
-# UPDATE CATEGORY (MANUAL)
+# UPDATE CATEGORY
 # =====================================================
 @router.put("/{txn_id}/category")
 def update_transaction_category(
@@ -243,10 +247,4 @@ def update_transaction_category(
 
     txn.category = category
     db.commit()
-    db.refresh(txn)
-
-    return {
-        "message": "Category updated successfully",
-        "transaction_id": txn.id,
-        "new_category": txn.category
-    }
+    return {"message": "Category updated"}

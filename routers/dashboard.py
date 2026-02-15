@@ -5,13 +5,12 @@ from datetime import datetime
 
 from database import get_db
 from auth import get_current_user
-from models import User, Account, Transaction
+from models import User, Account, Transaction,Reward
 
 router = APIRouter(
     prefix="/dashboard",
     tags=["Dashboard"]
 )
-
 
 # 🔹 DASHBOARD SUMMARY API
 @router.get("/summary")
@@ -61,10 +60,35 @@ def get_dashboard_summary(
         .scalar()
         or 0
     )
+    reward_points = (
+        db.query(func.sum(Reward.points_balance))
+        .filter(Reward.user_id == current_user.id)
+        .scalar()
+        or 0
+        )
+    spending = (
+        db.query(Transaction.category, func.sum(Transaction.amount))
+        .join(Account)
+        .filter(
+            Account.user_id == current_user.id,
+            Transaction.txn_type == "debit"
+            )
+            .group_by(Transaction.category)
+            .all()
+            )
+    spending_distribution = [
+        {"category": c or "Others", "amount": float(a)}
+        for c, a in spending
+        ]
+
+
 
     return {
         "balance": float(total_balance),
         "accounts": total_accounts,
         "income": float(income),
         "expenses": float(expenses),
+        "reward_points": int(reward_points), 
+        "spending_distribution": spending_distribution
+
     }

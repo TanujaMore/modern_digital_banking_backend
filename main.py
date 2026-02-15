@@ -2,7 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine
 import models
-from routers import users, accounts, transactions, categorize,budgets,bills,dashboard,rewards
+from routers import users, accounts, transactions, insights,categorize,budgets,bills,dashboard,rewards
+from routers import tickets
+
 
 models.Base.metadata.create_all(bind=engine)
 
@@ -22,6 +24,9 @@ app.include_router(categorize.router)
 app.include_router(budgets.router)
 app.include_router(bills.router)
 app.include_router(rewards.router)
+app.include_router(tickets.router) # new one
+app.include_router(insights.router)
+
 
 app.include_router(dashboard.router)
 

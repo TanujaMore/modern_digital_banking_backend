@@ -1,21 +1,20 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy import func, extract
 
 from database import get_db
-from models import Budget, Transaction
+from models import Budget, Transaction, Alert
 from schemas import BudgetCreate, BudgetResponse
-
-# ✅ FIXED IMPORT
+from utils.alert_helper import create_alert
 from auth import get_current_user
-
 
 router = APIRouter(
     prefix="/budgets",
     tags=["Budgets"]
-) 
+)
+
 # =================================================
-# A) CREATE BUDGET
+# CREATE BUDGET
 # =================================================
 @router.post("/", response_model=BudgetResponse)
 def create_budget(
@@ -34,12 +33,11 @@ def create_budget(
     db.add(new_budget)
     db.commit()
     db.refresh(new_budget)
-
     return new_budget
 
 
 # =================================================
-# B) LIST BUDGETS
+# LIST BUDGETS
 # =================================================
 @router.get("/", response_model=list[BudgetResponse])
 def list_budgets(
@@ -51,6 +49,9 @@ def list_budgets(
     ).all()
 
 
+# =================================================
+# BUDGET PROGRESS + SAFE ALERT
+# =================================================
 @router.get("/progress", response_model=list[BudgetResponse])
 def budget_progress(
     db: Session = Depends(get_db),
@@ -61,24 +62,41 @@ def budget_progress(
     ).all()
 
     for b in budgets:
-        
         spent = db.query(func.sum(Transaction.amount)).filter(
             Transaction.category == b.category,
             Transaction.txn_type == "debit",
             extract("month", Transaction.txn_date) == b.month,
-            extract("year", Transaction.txn_date) == b.year).scalar() or 0
+            extract("year", Transaction.txn_date) == b.year
+        ).scalar() or 0
 
         b.spent_amount = spent
 
-
-        # 🔥 WARNING LOGIC
         if spent > b.limit_amount:
             b.warning = "⚠️ Budget limit exceeded"
+
+            # 🔒 CHECK IF ALERT ALREADY EXISTS
+            existing_alert = db.query(Alert).filter(
+                Alert.user_id == current_user.id,
+                Alert.alert_type == "budget_exceeded",
+                Alert.message == f"{b.category} budget exceeded for {b.month}/{b.year}"
+            ).first()
+
+            if not existing_alert:
+                create_alert(
+                    db=db,
+                    user_id=current_user.id,
+                    title="Budget Exceeded",
+                    alert_type="budget_exceeded",
+                    message=f"{b.category} budget exceeded for {b.month}/{b.year}",
+                    severity="warning"
+                )
         else:
             b.warning = "Within limit"
 
     db.commit()
     return budgets
+
+
 # =================================================
 # DELETE BUDGET
 # =================================================
@@ -94,15 +112,15 @@ def delete_budget(
     ).first()
 
     if not budget:
-        return {"error": "Budget not found"}
+        raise HTTPException(status_code=404, detail="Budget not found")
 
     db.delete(budget)
     db.commit()
-
     return {"message": "Budget deleted successfully"}
 
+
 # =================================================
-# D) UPDATE BUDGET
+# UPDATE BUDGET
 # =================================================
 @router.put("/{budget_id}", response_model=BudgetResponse)
 def update_budget(
@@ -119,7 +137,6 @@ def update_budget(
     if not existing:
         raise HTTPException(status_code=404, detail="Budget not found")
 
-    # update fields
     existing.month = budget.month
     existing.year = budget.year
     existing.category = budget.category
@@ -127,5 +144,4 @@ def update_budget(
 
     db.commit()
     db.refresh(existing)
-
     return existing

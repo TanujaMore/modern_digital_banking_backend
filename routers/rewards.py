@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from datetime import datetime
-
 from database import get_db
 from auth import get_current_user
 from models import Reward, Account, Transaction, User
 from schemas import RewardCreate, RewardUpdate, RewardResponse
+from utils.alert_helper import create_alert  
 
 router = APIRouter(
     prefix="/rewards",
@@ -30,7 +30,6 @@ def create_reward(
     db.commit()
     db.refresh(new_reward)
     return new_reward
-
 
 # =====================================================
 # LIST REWARDS (ALWAYS RETURN BANK REWARDS)
@@ -121,16 +120,10 @@ def redeem_rewards(
         Reward.program_name == "Bank Rewards"
     ).first()
 
-    if not reward:
-        raise HTTPException(status_code=400, detail="No rewards available")
-
-    if points <= 0:
-        raise HTTPException(status_code=400, detail="Invalid points")
-
-    if reward.points_balance < points:
+    if not reward or reward.points_balance < points:
         raise HTTPException(status_code=400, detail="Not enough reward points")
 
-    credited_amount = points // 10  # 🔥 10 points = ₹1
+    credited_amount = points // 10  # 10 points = ₹1
 
     if credited_amount <= 0:
         raise HTTPException(status_code=400, detail="Minimum 10 points required")
@@ -143,13 +136,13 @@ def redeem_rewards(
     if not account:
         raise HTTPException(status_code=404, detail="Account not found")
 
-    # ✅ Credit bank account
+    # ✅ CREDIT ACCOUNT
     account.balance += credited_amount
 
-    # ✅ Deduct reward points
+    # ✅ DEDUCT POINTS
     reward.points_balance -= points
 
-    # ✅ Record transaction
+    # ✅ RECORD TRANSACTION
     txn = Transaction(
         account_id=account.id,
         amount=credited_amount,
@@ -160,6 +153,16 @@ def redeem_rewards(
     )
 
     db.add(txn)
+
+    # 🔔 ALERT (MUST BE BEFORE RETURN)
+    create_alert(
+        db,
+        current_user.id,
+        "Reward Redeemed",
+        f"₹{credited_amount} credited using reward points",
+        "info"
+    )
+
     db.commit()
 
     return {
