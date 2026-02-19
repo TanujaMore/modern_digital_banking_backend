@@ -170,65 +170,58 @@ def create_transaction(
 def upload_transactions_csv(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-    if not file.filename.endswith(".csv"):
-        raise HTTPException(status_code=400, detail="Only CSV files allowed")
-
-    content = file.file.read().decode("utf-8")
-    reader = csv.DictReader(io.StringIO(content))
-    created = 0
-
-    reward = db.query(Reward).filter(
-        Reward.user_id == current_user.id,
-        Reward.program_name == "Bank Rewards"
-    ).first()
-
-    if not reward:
-        reward = Reward(
-            user_id=current_user.id,
-            program_name="Bank Rewards",
-            points_balance=0
-        )
-        db.add(reward)
+    contents = file.file.read().decode("utf-8").splitlines()
+    reader = csv.DictReader(contents)
 
     for row in reader:
-        account = db.query(Account).filter(
-            Account.id == int(row["account_id"]),
-            Account.user_id == current_user.id
-        ).first()
+        # ---- account_id (safe) ----
+        account_id = row.get("account_id")
 
-        if not account:
-            continue
-
-        amount = Decimal(str(row["amount"]))
-        txn_type = row["txn_type"].lower()
-
-        if txn_type == "credit":
-            account.balance += float(amount)
-        elif txn_type == "debit":
-            account.balance -= float(amount)
+        if not account_id:
+            account = db.query(Account).filter(
+                Account.user_id == current_user.id
+            ).first()
+            if not account:
+                raise HTTPException(status_code=400, detail="No account found")
         else:
-            continue
+            account = db.query(Account).filter(
+                Account.id == int(account_id),
+                Account.user_id == current_user.id
+            ).first()
+            if not account:
+                raise HTTPException(status_code=403, detail="Invalid account_id")
+
+        # ---- amount ----
+        amount = row.get("amount")
+        if not amount:
+            raise HTTPException(status_code=400, detail="CSV missing amount")
+
+        # ---- txn_date ----
+        txn_date = (
+            datetime.fromisoformat(row["txn_date"])
+            if row.get("txn_date")
+            else datetime.utcnow()
+        )
 
         txn = Transaction(
             account_id=account.id,
-            amount=amount,
-            txn_type=txn_type,
             description=row.get("description"),
             merchant=row.get("merchant"),
-            txn_date=datetime.utcnow()
+            amount=float(amount),
+            txn_type=row.get("txn_type", "").lower(),
+            currency=row.get("currency", "INR"),
+            category=row.get("category", "Others"),
+            txn_date=txn_date,
         )
 
-        txn.category = auto_assign_category(db, txn)
         db.add(txn)
-        created += 1
-
-        if txn_type == "debit":
-            reward.points_balance += int(amount // 100)
 
     db.commit()
-    return {"message": f"{created} transactions uploaded successfully"}
+    return {"message": "CSV uploaded successfully"}
+
+
 
 # =====================================================
 # UPDATE CATEGORY

@@ -20,6 +20,7 @@ class User(Base):
     password = Column(String, nullable=False)
     phone = Column(String, unique=True, nullable=True)
     two_factor_enabled = Column(Boolean, default=False)
+    profile_image = Column(String, nullable=True) 
 
     accounts = relationship("Account", back_populates="user", cascade="all, delete")
     budgets = relationship("Budget", back_populates="user", cascade="all, delete")
@@ -179,3 +180,4 @@ class Ticket(Base):
     created_at = Column(DateTime, server_default=func.now())
 
     user = relationship("User")
+

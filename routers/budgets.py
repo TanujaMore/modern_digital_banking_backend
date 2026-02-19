@@ -145,3 +145,4 @@ def update_budget(
     db.commit()
     db.refresh(existing)
     return existing
+

@@ -1,14 +1,23 @@
 from enum import Enum
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, EmailStr, Field,validator
 from typing import Optional
 from datetime import datetime, date
-
+import re
 
 class RegisterUser(BaseModel):
     name: str
     email: EmailStr
     password: str
-    phone: str = Field(..., min_length=10, max_length=15)
+    phone: str
+
+    @validator("password")
+    def password_strength(cls, v):
+        pattern = r'^(?=.*[A-Z])(?=.*[a-z])(?=.*\d)(?=.*[@#$!%*?&]).{8,}$'
+        if not re.match(pattern, v):
+            raise ValueError(
+                "Password must include uppercase, lowercase, number and special character"
+            )
+        return v
 
 class UserResponse(BaseModel):
     id: int
@@ -38,6 +47,9 @@ class UpdateProfile(BaseModel):
 class ChangePassword(BaseModel):
     current_password: str
     new_password: str
+
+
+
 
 
 class TwoFactorUpdate(BaseModel):
@@ -235,3 +247,16 @@ class BurnRateOut(BaseModel):
     monthly_spend: float
     daily_average: float
 
+
+
+class VerifyOtpRequest(BaseModel):
+    email: str
+    otp: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    new_password: str
+    

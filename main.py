@@ -2,8 +2,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import engine
 import models
-from routers import users, accounts, transactions, insights,categorize,budgets,bills,dashboard,rewards
+from routers import users, accounts,alerts, transactions, exports,insights,categorize,budgets,bills,dashboard,rewards
 from routers import tickets
+from fastapi.staticfiles import StaticFiles
 
 
 models.Base.metadata.create_all(bind=engine)
@@ -26,7 +27,9 @@ app.include_router(bills.router)
 app.include_router(rewards.router)
 app.include_router(tickets.router) # new one
 app.include_router(insights.router)
-
+app.include_router(exports.router)
+app.include_router(alerts.router)
+app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 app.include_router(dashboard.router)
 
